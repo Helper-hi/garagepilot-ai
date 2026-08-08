@@ -1,94 +1,49 @@
-import fastify, { FastifyInstance } from 'fastify';
-import { database } from './database';
-import { logger } from './utils/logger';
+import Fastify, { FastifyInstance } from 'fastify';
 import { config } from './config';
+import { logger } from './utils/logger';
+import { database } from './database';
 
 export async function createServer(): Promise<FastifyInstance> {
-  const server = fastify({
-    logger: true,
-    disableRequestLogging: config.NODE_ENV === 'production'
+  const server = Fastify({
+    logger: false, // We use Winston instead
+    trustProxy: true,
+    requestIdLogLabel: 'requestId',
+    genReqId: () => {
+      return Math.random().toString(36).substring(2, 15);
+    }
   });
 
-  // Initialize database connection
-  await database.initialize();
-
-  // Add CORS support
-  await server.register(import('@fastify/cors'), {
-    origin: true,
-    credentials: true
-  });
-
-  // Add JSON support
-  await server.register(import('@fastify/formbody'));
-
-  // Health check endpoint
+  // Health check
   server.get('/health', async (request, reply) => {
-    try {
-      const dbHealthy = await database.healthCheck();
-      
-      if (!dbHealthy) {
-        return reply.status(503).send({ 
-          status: 'unhealthy', 
-          database: 'disconnected' 
-        });
-      }
-
-      return {
-        status: 'healthy',
-        timestamp: new Date().toISOString(),
-        database: 'connected',
-        version: process.env.npm_package_version || '1.0.0'
-      };
-    } catch (error) {
-      logger.error('Health check failed:', error);
-      return reply.status(503).send({ 
-        status: 'error', 
-        message: 'Internal error' 
-      });
-    }
-  });
-
-  // Root endpoint
-  server.get('/', async (request, reply) => {
-    return {
-      message: 'GaragePilot AI Server',
-      version: '1.0.0',
-      status: 'running',
-      timestamp: new Date().toISOString()
-    };
-  });
-
-  // Chat endpoint (temporary for testing)
-  server.post('/chat', async (request, reply) => {
-    const { message, tenantId, userId } = request.body as any;
-
-    if (!message) {
-      return reply.status(400).send({ error: 'Message is required' });
-    }
-
-    // TODO: Implement Pilot Core integration
-    logger.info(`Received message:${message} from tenant: ${tenantId}`);
-
-    // Temporary response
-    return {
-      response: "Bonjour ! Je suis GaragePilot AI, votre assistant IA. Comment puis-je vous aider aujourd'hui ?",
-      conversationId: 'temp-123', // TODO: Generate real ID
-      timestamp: new Date().toISOString()
-    };
-  });
-
-  // Error handler
-  server.setErrorHandler(async (error, request, reply) => {
-    logger.error('Unhandled error:', error);
+    const isDbHealthy = await database.healthCheck();
     
-    const statusCode = error.statusCode || 500;
-    const message = config.NODE_ENV === 'production' ? 'Internal Server Error' : error.message;
+    if (!isDbHealthy) {
+      reply.status(503);
+      return { status: 'unhealthy', database: false };
+    }
+    
+    return { 
+      status: 'healthy',
+      timestamp: new Date().toISOString(),
+      database: true,
+      version: '1.0.0'
+    };
+  });
 
-    reply.status(statusCode).send({
-      error: message,
-      timestamp: new Date().toISOString()
+  // Initialize database
+  await database.initialize();
+  
+  // Register routes
+  await registerRoutes(server);
+  
+  return server;
+}
+
+async function registerRoutes(server: FastifyInstance) {
+  // API routes will be added here
+  server.register(async function(fastify) {
+    fastify.get('/api/status', async () => {
+      return { message: 'GaragePilot AI is running', timestamp: new Date().toISOString() };
     });
   });
-
-  return server;
 }
